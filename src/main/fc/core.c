@@ -149,7 +149,6 @@ int16_t magHold;
 static FAST_DATA_ZERO_INIT uint8_t pidUpdateCounter;
 
 static bool crashFlipModeActive = false;
-static bool instantCrashFlipModeActive = false;
 static timeUs_t disarmAt;     // Time of automatic disarm when "Don't spin the motors when armed" is enabled and auto_disarm_delay is nonzero
 static int lastArmingDisabledReason = 0;
 static timeUs_t lastDisarmTimeUs;
@@ -287,28 +286,19 @@ void updateArmingStatus(void)
 // --- handle crashFlip behaviours while armed ---
 if (crashFlipModeActive) {
     if (!IS_RC_MODE_ACTIVE(BOXCRASHFLIP)) {
-        // Pilot has reverted the crash flip switch while crashflip is active and craft is  armed
+        // Pilot has reverted the crash flip switch, or for instant mode, quad is upright
         if (!mixerConfig()->crashflip_auto_rearm) {
-            // we are in manual re-arm mode:  block arming until manual re-arm:
+            // we are in manual re-arm mode: block arming until manual re-arm:
             setArmingDisabled(ARMING_DISABLED_CRASHFLIP); // block tryArm() until user disarms manually
             clearWasLastDisarmUserRequested();
             // tell disarm() that this was not a user generated disarm
             // also clear the flag in rc_controls so that it will only be true when the pilot makes a new user manual disarm
             disarm(DISARM_REASON_CRASHFLIP); // stop the motors, revert crashflipMode and set motor direction normal
         } else {
-            // we are in auto re-arm mode, terminate crashflip mode and set motor direction normal
+            // we are in auto re-arm mode, or instant mode, terminate crashflip mode and set motor direction normal
             setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
             crashFlipModeActive = false;
         }
-    }
-}
-
-// --- handle instantCrashFlip behaviours while armed ---
-if (instantCrashFlipModeActive) {
-    if (!IS_RC_MODE_ACTIVE(BOXCRASHFLIP) || isUpright()) {
-        // Pilot has reverted the crash flip switch or quad is upright
-        setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
-        instantCrashFlipModeActive = false;
     }
 }
 }
@@ -532,18 +522,13 @@ void disarm(flightLogDisarmReason_e reason)
         BEEP_OFF;
 
 #ifdef USE_PERSISTENT_STATS
-        if (!crashFlipModeActive && !instantCrashFlipModeActive) {
+        if (!crashFlipModeActive) {
             statsOnDisarm();
         }
 #endif
     // Terminate crashflip mode in any disarm
     if (crashFlipModeActive) {
         crashFlipModeActive = false;
-    }
-
-    // Terminate instant crashflip mode in any disarm
-    if (instantCrashFlipModeActive) {
-        instantCrashFlipModeActive = false;
     }
 
         // always set motor direction to normal on disarming
@@ -605,14 +590,13 @@ if (isMotorProtocolDshot()) {
     #endif
 
     bool crashFlipRequested = IS_RC_MODE_ACTIVE(BOXCRASHFLIP);
-    crashFlipModeActive = crashFlipRequested && !mixerConfig()->crashflip_instant;
-    instantCrashFlipModeActive = crashFlipRequested && mixerConfig()->crashflip_instant;
-    setMotorSpinDirection(crashFlipRequested ? DSHOT_CMD_SPIN_DIRECTION_REVERSED : DSHOT_CMD_SPIN_DIRECTION_NORMAL);
+    crashFlipModeActive = crashFlipRequested;
+    setMotorSpinDirection(crashFlipModeActive ? DSHOT_CMD_SPIN_DIRECTION_REVERSED : DSHOT_CMD_SPIN_DIRECTION_NORMAL);
 }
 #endif // USE_DSHOT
 
 #ifdef USE_LAUNCH_CONTROL
-        if ((!crashFlipModeActive && !instantCrashFlipModeActive) && (canUseLaunchControl() || (tryingToArm == ARMING_DELAYED_LAUNCH_CONTROL))) {
+        if ((!crashFlipModeActive) && (canUseLaunchControl() || (tryingToArm == ARMING_DELAYED_LAUNCH_CONTROL))) {
             if (launchControlState == LAUNCH_CONTROL_DISABLED) {  // only activate if it hasn't already been triggered
                 launchControlState = LAUNCH_CONTROL_ACTIVE;
             }
@@ -878,7 +862,6 @@ bool processRx(timeUs_t currentTimeUs)
         && pidConfig()->runaway_takeoff_prevention
         && !runawayTakeoffCheckDisabled
         && !crashFlipModeActive
-        && !instantCrashFlipModeActive
         && !runawayTakeoffTemporarilyDisabled
         && !isFixedWing()) {
 
@@ -1036,8 +1019,8 @@ void processRxModes(timeUs_t currentTimeUs)
 #endif
 
     // Instant Crash Flip: activate during flight if switch is on and instant flag is set
-    if (ARMING_FLAG(ARMED) && IS_RC_MODE_ACTIVE(BOXCRASHFLIP) && !instantCrashFlipModeActive && mixerConfig()->crashflip_instant) {
-        instantCrashFlipModeActive = true;
+    if (ARMING_FLAG(ARMED) && IS_RC_MODE_ACTIVE(BOXCRASHFLIP) && !crashFlipModeActive && mixerConfig()->crashflip_instant) {
+        crashFlipModeActive = true;
         #ifdef USE_DSHOT
         setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_REVERSED);
         #endif
@@ -1237,7 +1220,6 @@ static FAST_CODE_NOINLINE void subTaskPidController(timeUs_t currentTimeUs)
         && pidConfig()->runaway_takeoff_prevention
         && !runawayTakeoffCheckDisabled
         && !crashFlipModeActive
-        && !instantCrashFlipModeActive
         && !runawayTakeoffTemporarilyDisabled
         && !FLIGHT_MODE(GPS_RESCUE_MODE)   // disable Runaway Takeoff triggering if GPS Rescue is active
         // check that motors are running
@@ -1434,7 +1416,7 @@ FAST_CODE void taskMainPidLoop(timeUs_t currentTimeUs)
 
 bool isCrashFlipModeActive(void)
 {
-    return crashFlipModeActive || instantCrashFlipModeActive;
+    return crashFlipModeActive;
 }
 
 timeUs_t getLastDisarmTimeUs(void)
