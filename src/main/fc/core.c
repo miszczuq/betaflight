@@ -305,11 +305,12 @@ if (crashFlipModeActive) {
 
 // --- handle instantCrashFlip behaviours while armed ---
 if (instantCrashFlipModeActive) {
-    // Auto re-arm when quad is upright (regardless of switch position)
-    if (isUpright()) {
+    if (!IS_RC_MODE_ACTIVE(BOXCRASHFLIP) || isUpright()) {
+        // Pilot has reverted the crash flip switch or quad is upright
         setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
         instantCrashFlipModeActive = false;
     }
+}
 }
 #endif // USE_DSHOT
     } else {
@@ -500,7 +501,7 @@ void disarm(flightLogDisarmReason_e reason)
 
     if (!wasLastDisarmUserRequested()) {
         // Non-user disarm, clear the user-initated flag in rc_controls.c
-        clearWasLastDisarmUserRequested();
+        clearWasLastDisarmUserRequested();  
     }
 
     if (ARMING_FLAG(ARMED)) {
@@ -511,7 +512,7 @@ void disarm(flightLogDisarmReason_e reason)
         lastDisarmTimeUs = micros();
 
 #ifdef USE_OSD
-        if (IS_RC_MODE_ACTIVE(BOXCRASHFLIP) || IS_RC_MODE_ACTIVE(BOXINSTANTCRASHFLIP) || isLaunchControlActive()) {
+        if (IS_RC_MODE_ACTIVE(BOXCRASHFLIP) || isLaunchControlActive()) {
             osdSuppressStats(true);
         }
 #endif
@@ -603,13 +604,15 @@ if (isMotorProtocolDshot()) {
     }
     #endif
 
-    crashFlipModeActive = IS_RC_MODE_ACTIVE(BOXCRASHFLIP);
-    setMotorSpinDirection(crashFlipModeActive ? DSHOT_CMD_SPIN_DIRECTION_REVERSED : DSHOT_CMD_SPIN_DIRECTION_NORMAL);
+    bool crashFlipRequested = IS_RC_MODE_ACTIVE(BOXCRASHFLIP);
+    crashFlipModeActive = crashFlipRequested && !mixerConfig()->crashflip_instant;
+    instantCrashFlipModeActive = crashFlipRequested && mixerConfig()->crashflip_instant;
+    setMotorSpinDirection(crashFlipRequested ? DSHOT_CMD_SPIN_DIRECTION_REVERSED : DSHOT_CMD_SPIN_DIRECTION_NORMAL);
 }
 #endif // USE_DSHOT
 
 #ifdef USE_LAUNCH_CONTROL
-        if (!crashFlipModeActive && (canUseLaunchControl() || (tryingToArm == ARMING_DELAYED_LAUNCH_CONTROL))) {
+        if ((!crashFlipModeActive && !instantCrashFlipModeActive) && (canUseLaunchControl() || (tryingToArm == ARMING_DELAYED_LAUNCH_CONTROL))) {
             if (launchControlState == LAUNCH_CONTROL_DISABLED) {  // only activate if it hasn't already been triggered
                 launchControlState = LAUNCH_CONTROL_ACTIVE;
             }
@@ -1030,10 +1033,16 @@ void processRxModes(timeUs_t currentTimeUs)
     if (crashFlipModeActive) {
         beeper(BEEPER_CRASHFLIP_MODE);
     }
-    if (instantCrashFlipModeActive) {
-        beeper(BEEPER_CRASHFLIP_MODE);  // Reuse for instant
-    }
 #endif
+
+    // Instant Crash Flip: activate during flight if switch is on and instant flag is set
+    if (ARMING_FLAG(ARMED) && IS_RC_MODE_ACTIVE(BOXCRASHFLIP) && !instantCrashFlipModeActive && mixerConfig()->crashflip_instant) {
+        instantCrashFlipModeActive = true;
+        #ifdef USE_DSHOT
+        setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_REVERSED);
+        #endif
+        beeper(BEEPER_CRASHFLIP_MODE);
+    }
 
     if (!cliMode && !(IS_RC_MODE_ACTIVE(BOXPARALYZE) && !ARMING_FLAG(ARMED))) {
         processRcAdjustments(currentControlRateProfile);
@@ -1117,24 +1126,6 @@ void processRxModes(timeUs_t currentTimeUs)
         DISABLE_FLIGHT_MODE(GPS_RESCUE_MODE);
     }
 #endif
-
-    // Instant Crash Flip: activate during flight if switch is on
-    if (ARMING_FLAG(ARMED) && IS_RC_MODE_ACTIVE(BOXINSTANTCRASHFLIP) && !instantCrashFlipModeActive) {
-        // Conditions: throttle low for safety
-        if (calculateThrottleStatus() == THROTTLE_LOW) {
-            instantCrashFlipModeActive = true;
-            #ifdef USE_DSHOT
-            setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_REVERSED);
-            #endif
-            beeper(BEEPER_CRASHFLIP_MODE);  // Reuse existing beeper
-        }
-    } else if (ARMING_FLAG(ARMED) && !IS_RC_MODE_ACTIVE(BOXINSTANTCRASHFLIP) && instantCrashFlipModeActive) {
-        // Deactivate if switch off (but auto re-arm will handle position-based deactivation)
-        instantCrashFlipModeActive = false;
-        #ifdef USE_DSHOT
-        setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
-        #endif
-    }
 
 #ifdef USE_CHIRP
     if (IS_RC_MODE_ACTIVE(BOXCHIRP) && !FLIGHT_MODE(FAILSAFE_MODE) && !FLIGHT_MODE(GPS_RESCUE_MODE)) {
@@ -1444,11 +1435,6 @@ FAST_CODE void taskMainPidLoop(timeUs_t currentTimeUs)
 bool isCrashFlipModeActive(void)
 {
     return crashFlipModeActive || instantCrashFlipModeActive;
-}
-
-bool isInstantCrashFlipModeActive(void)
-{
-    return instantCrashFlipModeActive;
 }
 
 timeUs_t getLastDisarmTimeUs(void)
