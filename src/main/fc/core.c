@@ -149,6 +149,7 @@ int16_t magHold;
 static FAST_DATA_ZERO_INIT uint8_t pidUpdateCounter;
 
 static bool crashFlipModeActive = false;
+static bool instantCrashFlipModeActive = false;
 static timeUs_t disarmAt;     // Time of automatic disarm when "Don't spin the motors when armed" is enabled and auto_disarm_delay is nonzero
 static int lastArmingDisabledReason = 0;
 static timeUs_t lastDisarmTimeUs;
@@ -299,6 +300,15 @@ if (crashFlipModeActive) {
             setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
             crashFlipModeActive = false;
         }
+    }
+}
+
+// --- handle instantCrashFlip behaviours while armed ---
+if (instantCrashFlipModeActive) {
+    // Auto re-arm when quad is upright (regardless of switch position)
+    if (isUpright()) {
+        setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
+        instantCrashFlipModeActive = false;
     }
 }
 #endif // USE_DSHOT
@@ -501,7 +511,7 @@ void disarm(flightLogDisarmReason_e reason)
         lastDisarmTimeUs = micros();
 
 #ifdef USE_OSD
-        if (IS_RC_MODE_ACTIVE(BOXCRASHFLIP) || isLaunchControlActive()) {
+        if (IS_RC_MODE_ACTIVE(BOXCRASHFLIP) || IS_RC_MODE_ACTIVE(BOXINSTANTCRASHFLIP) || isLaunchControlActive()) {
             osdSuppressStats(true);
         }
 #endif
@@ -521,13 +531,18 @@ void disarm(flightLogDisarmReason_e reason)
         BEEP_OFF;
 
 #ifdef USE_PERSISTENT_STATS
-        if (!crashFlipModeActive) {
+        if (!crashFlipModeActive && !instantCrashFlipModeActive) {
             statsOnDisarm();
         }
 #endif
     // Terminate crashflip mode in any disarm
     if (crashFlipModeActive) {
         crashFlipModeActive = false;
+    }
+
+    // Terminate instant crashflip mode in any disarm
+    if (instantCrashFlipModeActive) {
+        instantCrashFlipModeActive = false;
     }
 
         // always set motor direction to normal on disarming
@@ -860,6 +875,7 @@ bool processRx(timeUs_t currentTimeUs)
         && pidConfig()->runaway_takeoff_prevention
         && !runawayTakeoffCheckDisabled
         && !crashFlipModeActive
+        && !instantCrashFlipModeActive
         && !runawayTakeoffTemporarilyDisabled
         && !isFixedWing()) {
 
@@ -1014,6 +1030,9 @@ void processRxModes(timeUs_t currentTimeUs)
     if (crashFlipModeActive) {
         beeper(BEEPER_CRASHFLIP_MODE);
     }
+    if (instantCrashFlipModeActive) {
+        beeper(BEEPER_CRASHFLIP_MODE);  // Reuse for instant
+    }
 #endif
 
     if (!cliMode && !(IS_RC_MODE_ACTIVE(BOXPARALYZE) && !ARMING_FLAG(ARMED))) {
@@ -1098,6 +1117,24 @@ void processRxModes(timeUs_t currentTimeUs)
         DISABLE_FLIGHT_MODE(GPS_RESCUE_MODE);
     }
 #endif
+
+    // Instant Crash Flip: activate during flight if switch is on
+    if (ARMING_FLAG(ARMED) && IS_RC_MODE_ACTIVE(BOXINSTANTCRASHFLIP) && !instantCrashFlipModeActive) {
+        // Conditions: throttle low for safety
+        if (calculateThrottleStatus() == THROTTLE_LOW) {
+            instantCrashFlipModeActive = true;
+            #ifdef USE_DSHOT
+            setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_REVERSED);
+            #endif
+            beeper(BEEPER_CRASHFLIP_MODE);  // Reuse existing beeper
+        }
+    } else if (ARMING_FLAG(ARMED) && !IS_RC_MODE_ACTIVE(BOXINSTANTCRASHFLIP) && instantCrashFlipModeActive) {
+        // Deactivate if switch off (but auto re-arm will handle position-based deactivation)
+        instantCrashFlipModeActive = false;
+        #ifdef USE_DSHOT
+        setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
+        #endif
+    }
 
 #ifdef USE_CHIRP
     if (IS_RC_MODE_ACTIVE(BOXCHIRP) && !FLIGHT_MODE(FAILSAFE_MODE) && !FLIGHT_MODE(GPS_RESCUE_MODE)) {
@@ -1209,6 +1246,7 @@ static FAST_CODE_NOINLINE void subTaskPidController(timeUs_t currentTimeUs)
         && pidConfig()->runaway_takeoff_prevention
         && !runawayTakeoffCheckDisabled
         && !crashFlipModeActive
+        && !instantCrashFlipModeActive
         && !runawayTakeoffTemporarilyDisabled
         && !FLIGHT_MODE(GPS_RESCUE_MODE)   // disable Runaway Takeoff triggering if GPS Rescue is active
         // check that motors are running
@@ -1405,7 +1443,12 @@ FAST_CODE void taskMainPidLoop(timeUs_t currentTimeUs)
 
 bool isCrashFlipModeActive(void)
 {
-    return crashFlipModeActive;
+    return crashFlipModeActive || instantCrashFlipModeActive;
+}
+
+bool isInstantCrashFlipModeActive(void)
+{
+    return instantCrashFlipModeActive;
 }
 
 timeUs_t getLastDisarmTimeUs(void)
