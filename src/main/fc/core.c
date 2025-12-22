@@ -283,25 +283,32 @@ void updateArmingStatus(void)
         LED0_ON;
 
 #ifdef USE_DSHOT
-// --- handle crashFlip behaviours while armed ---
-if (crashFlipModeActive) {
-    if (!IS_RC_MODE_ACTIVE(BOXCRASHFLIP)) {
-        // Pilot has reverted the crash flip switch, or for instant mode, quad is upright
-        if (!mixerConfig()->crashflip_auto_rearm) {
-            // we are in manual re-arm mode: block arming until manual re-arm:
-            setArmingDisabled(ARMING_DISABLED_CRASHFLIP); // block tryArm() until user disarms manually
-            clearWasLastDisarmUserRequested();
-            // tell disarm() that this was not a user generated disarm
-            // also clear the flag in rc_controls so that it will only be true when the pilot makes a new user manual disarm
-            disarm(DISARM_REASON_CRASHFLIP); // stop the motors, revert crashflipMode and set motor direction normal
-        } else {
-            // we are in auto re-arm mode, or instant mode, terminate crashflip mode and set motor direction normal
-            setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
-            crashFlipModeActive = false;
+        // --- handle crashFlip behaviours while armed ---
+        if (crashFlipModeActive) {
+            if (!IS_RC_MODE_ACTIVE(BOXCRASHFLIP)) {
+                // Pilot has reverted the crash flip switch while crashflip is active and craft is armed
+                if (!mixerConfig()->crashflip_auto_rearm) {
+                    // we are in manual re-arm mode:  block arming until manual re-arm:
+                    setArmingDisabled(ARMING_DISABLED_CRASHFLIP); // block tryArm() until user disarms manually
+                    clearWasLastDisarmUserRequested();
+                    // tell disarm() that this was not a user generated disarm
+                    // also clear the flag in rc_controls so that it will only be true when the pilot makes a new user manual disarm
+                    disarm(DISARM_REASON_CRASHFLIP); // stop the motors, revert crashflipMode and set motor direction normal
+                } else {
+                    // we are in auto re-arm mode, terminate crashflip mode and set motor direction normal
+                    setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
+                    crashFlipModeActive = false;
+                }
+            }
         }
-    }
-}
-}
+        if (mixerConfig()->crashflip_instant && !crashFlipModeActive) {
+            // Pilot has used crash flip switch while crashflip is disabled and craft is armed
+            if (IS_RC_MODE_ACTIVE(BOXCRASHFLIP)) {
+                crashFlipModeActive = true;
+                setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_REVERSED);
+
+            }
+        }
 #endif // USE_DSHOT
     } else {
         // arming switch on, but not yet armed; currently DISARMED

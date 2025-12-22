@@ -452,6 +452,117 @@ TEST(ArmingPreventionTest, In3DModeAllowArmingWhenEnteringThrottleDeadband)
     EXPECT_EQ(0, getArmingDisableFlags());
 }
 
+// -----------------------------------------------------------------------------
+// Crashflip behaviour tests
+// -----------------------------------------------------------------------------
+
+TEST(CrashflipTest, InstantCrashflipActivatesWhenArmedAndSwitchOn)
+{
+    // given
+    simulationTime = 0;
+    // Map an aux to BOXCRASHFLIP
+    modeActivationConditionsMutable(2)->auxChannelIndex = 2;
+    modeActivationConditionsMutable(2)->modeId = BOXCRASHFLIP;
+    modeActivationConditionsMutable(2)->range.startStep = CHANNEL_VALUE_TO_STEP(1750);
+    modeActivationConditionsMutable(2)->range.endStep = CHANNEL_VALUE_TO_STEP(CHANNEL_RANGE_MAX);
+    rcControlsInit();
+
+    // and: armed
+    ENABLE_ARMING_FLAG(ARMED);
+
+    // and: instant crashflip enabled
+    mixerConfigMutable()->crashflip_instant = true;
+
+    // when: switch ON
+    rcData[2] = 1800;
+    updateActivatedModes();
+    // processRxModes is normally called from the main loop
+    processRxModes(0);
+
+    // expect: crashflip active
+    EXPECT_TRUE(isCrashFlipModeActive());
+}
+
+TEST(CrashflipTest, Armed_RevertSwitch_ManualNoAutoRearm_TriggersDisarmAndBlocksRearm)
+{
+    // given
+    simulationTime = 0;
+    modeActivationConditionsMutable(2)->auxChannelIndex = 2;
+    modeActivationConditionsMutable(2)->modeId = BOXCRASHFLIP;
+    modeActivationConditionsMutable(2)->range.startStep = CHANNEL_VALUE_TO_STEP(1750);
+    modeActivationConditionsMutable(2)->range.endStep = CHANNEL_VALUE_TO_STEP(CHANNEL_RANGE_MAX);
+    rcControlsInit();
+
+
+    // and: unit is armed
+    ENABLE_ARMING_FLAG(ARMED);
+
+    // and: set crashflip active via public API (enable instant then toggle switch ON)
+    mixerConfigMutable()->crashflip_instant = true;
+    rcData[2] = 1800; // switch ON
+    updateActivatedModes();
+    processRxModes(0);
+
+    // and: auto rearm disabled
+    mixerConfigMutable()->crashflip_auto_rearm = false;
+
+    // when: pilot reverts switch (OFF)
+    rcData[2] = 1000;
+    updateActivatedModes();
+    updateArmingStatus();
+
+    // expect: behavior depends on whether DSHOT crashflip handling is enabled
+#ifdef USE_DSHOT
+    // with DSHOT: revert should disarm and block rearm when auto_rearm is false
+    EXPECT_FALSE(ARMING_FLAG(ARMED));
+    EXPECT_TRUE(getArmingDisableFlags() & ARMING_DISABLED_CRASHFLIP);
+#else
+    // without DSHOT handling the revert is not processed here; remain armed and crashflip still active
+    EXPECT_TRUE(ARMING_FLAG(ARMED));
+    EXPECT_TRUE(isCrashFlipModeActive());
+#endif
+}
+
+TEST(CrashflipTest, Armed_RevertSwitch_AutoRearm_TerminatesCrashflipButRemainsArmed)
+{
+    // given
+    simulationTime = 0;
+    modeActivationConditionsMutable(2)->auxChannelIndex = 2;
+    modeActivationConditionsMutable(2)->modeId = BOXCRASHFLIP;
+    modeActivationConditionsMutable(2)->range.startStep = CHANNEL_VALUE_TO_STEP(1750);
+    modeActivationConditionsMutable(2)->range.endStep = CHANNEL_VALUE_TO_STEP(CHANNEL_RANGE_MAX);
+    rcControlsInit();
+
+
+    // and: unit is armed
+    ENABLE_ARMING_FLAG(ARMED);
+
+    // and: set crashflip active via public API
+    mixerConfigMutable()->crashflip_instant = true;
+    rcData[2] = 1800; // switch ON
+    updateActivatedModes();
+    processRxModes(0);
+
+    // and: auto rearm enabled
+    mixerConfigMutable()->crashflip_auto_rearm = true;
+
+    // when: pilot reverts switch (OFF)
+    rcData[2] = 1000;
+    updateActivatedModes();
+    updateArmingStatus();
+
+    // expect: behavior depends on whether DSHOT crashflip handling is enabled
+#ifdef USE_DSHOT
+    // with DSHOT: revert should terminate crashflip mode and keep armed when auto_rearm is true
+    EXPECT_TRUE(ARMING_FLAG(ARMED));
+    EXPECT_FALSE(isCrashFlipModeActive());
+#else
+    // without DSHOT handling, crashflip remains active and still armed
+    EXPECT_TRUE(ARMING_FLAG(ARMED));
+    EXPECT_TRUE(isCrashFlipModeActive());
+#endif
+}
+
 TEST(ArmingPreventionTest, When3DModeDisabledThenNormalThrottleArmingConditionApplies)
 {
     // given
