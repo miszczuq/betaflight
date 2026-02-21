@@ -149,6 +149,7 @@ int16_t magHold;
 static FAST_DATA_ZERO_INIT uint8_t pidUpdateCounter;
 
 static bool crashFlipModeActive = false;
+static bool crashflipExitThrottleWait = false;
 static timeUs_t disarmAt;     // Time of automatic disarm when "Don't spin the motors when armed" is enabled and auto_disarm_delay is nonzero
 static int lastArmingDisabledReason = 0;
 static timeUs_t lastDisarmTimeUs;
@@ -286,8 +287,16 @@ void updateArmingStatus(void)
 // --- handle crashFlip behaviours while armed ---
 if (crashFlipModeActive) {
     if (!IS_RC_MODE_ACTIVE(BOXCRASHFLIP)) {
-        // Pilot has reverted the crash flip switch while crashflip is active and craft is  armed
-        if (!mixerConfig()->crashflip_auto_rearm) {
+        // Pilot has reverted the crash flip switch while crashflip is active and craft is armed
+        if (mixerConfig()->crashflip_no_rearm) {
+            // no-rearm mode: stay armed, revert motor direction
+            setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
+            crashFlipModeActive = false;
+            if (calculateThrottleStatus() != THROTTLE_LOW) {
+                // throttle is not zero - suppress motor output until pilot lowers throttle
+                crashflipExitThrottleWait = true;
+            }
+        } else if (!mixerConfig()->crashflip_auto_rearm) {
             // we are in manual re-arm mode:  block arming until manual re-arm:
             setArmingDisabled(ARMING_DISABLED_CRASHFLIP); // block tryArm() until user disarms manually
             clearWasLastDisarmUserRequested();
@@ -300,6 +309,16 @@ if (crashFlipModeActive) {
             crashFlipModeActive = false;
         }
     }
+} else if (mixerConfig()->crashflip_no_rearm && IS_RC_MODE_ACTIVE(BOXCRASHFLIP)) {
+    // no-rearm mode: enter crashflip while armed (no disarm/rearm cycle needed)
+    crashFlipModeActive = true;
+    crashflipExitThrottleWait = false;
+    setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_REVERSED);
+}
+
+// clear throttle wait when throttle returns to zero
+if (crashflipExitThrottleWait && calculateThrottleStatus() == THROTTLE_LOW) {
+    crashflipExitThrottleWait = false;
 }
 #endif // USE_DSHOT
     } else {
@@ -529,6 +548,7 @@ void disarm(flightLogDisarmReason_e reason)
     if (crashFlipModeActive) {
         crashFlipModeActive = false;
     }
+    crashflipExitThrottleWait = false;
 
         // always set motor direction to normal on disarming
 #ifdef USE_DSHOT
@@ -1406,6 +1426,11 @@ FAST_CODE void taskMainPidLoop(timeUs_t currentTimeUs)
 bool isCrashFlipModeActive(void)
 {
     return crashFlipModeActive;
+}
+
+bool isCrashFlipExitThrottleWait(void)
+{
+    return crashflipExitThrottleWait;
 }
 
 timeUs_t getLastDisarmTimeUs(void)

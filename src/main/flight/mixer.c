@@ -692,8 +692,12 @@ FAST_CODE_NOINLINE void mixTable(timeUs_t currentTimeUs)
     if (applyCrashFlipModeToMotors()) {
         return;
         // if crash flip modeis being applied to the motors, mixing is done
-        
-        
+    }
+
+    if (isCrashFlipExitThrottleWait()) {
+        // after exiting no-rearm crashflip with throttle raised, suppress motor output until throttle returns to zero
+        applyMotorStop();
+        return;
     }
 
     motorMixer_t * activeMixer = &mixerRuntime.currentMixer[0];
