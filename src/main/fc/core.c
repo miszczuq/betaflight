@@ -149,6 +149,8 @@ int16_t magHold;
 static FAST_DATA_ZERO_INIT uint8_t pidUpdateCounter;
 
 static bool crashFlipModeActive = false;
+static bool crashflipExitThrottleWait = false;
+static bool crashflipDirectionPending = false;
 static timeUs_t disarmAt;     // Time of automatic disarm when "Don't spin the motors when armed" is enabled and auto_disarm_delay is nonzero
 static int lastArmingDisabledReason = 0;
 static timeUs_t lastDisarmTimeUs;
@@ -286,20 +288,35 @@ void updateArmingStatus(void)
 // --- handle crashFlip behaviours while armed ---
 if (crashFlipModeActive) {
     if (!IS_RC_MODE_ACTIVE(BOXCRASHFLIP)) {
-        // Pilot has reverted the crash flip switch while crashflip is active and craft is  armed
-        if (!mixerConfig()->crashflip_auto_rearm) {
-            // we are in manual re-arm mode:  block arming until manual re-arm:
-            setArmingDisabled(ARMING_DISABLED_CRASHFLIP); // block tryArm() until user disarms manually
+        if (mixerConfig()->crashflip_no_rearm) {
+            crashFlipModeActive = false;
+            crashflipDirectionPending = true;
+            setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
+            if (calculateThrottleStatus() != THROTTLE_LOW) {
+                crashflipExitThrottleWait = true;
+            }
+        } else if (!mixerConfig()->crashflip_auto_rearm) {
+            setArmingDisabled(ARMING_DISABLED_CRASHFLIP);
             clearWasLastDisarmUserRequested();
-            // tell disarm() that this was not a user generated disarm
-            // also clear the flag in rc_controls so that it will only be true when the pilot makes a new user manual disarm
-            disarm(DISARM_REASON_CRASHFLIP); // stop the motors, revert crashflipMode and set motor direction normal
+            disarm(DISARM_REASON_CRASHFLIP);
         } else {
-            // we are in auto re-arm mode, terminate crashflip mode and set motor direction normal
             setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_NORMAL);
             crashFlipModeActive = false;
         }
     }
+} else if (mixerConfig()->crashflip_no_rearm && IS_RC_MODE_ACTIVE(BOXCRASHFLIP)) {
+    crashFlipModeActive = true;
+    crashflipExitThrottleWait = false;
+    crashflipDirectionPending = true;
+    setMotorSpinDirection(DSHOT_CMD_SPIN_DIRECTION_REVERSED);
+}
+
+if (crashflipDirectionPending && dshotCommandQueueEmpty()) {
+    crashflipDirectionPending = false;
+}
+
+if (crashflipExitThrottleWait && calculateThrottleStatus() == THROTTLE_LOW) {
+    crashflipExitThrottleWait = false;
 }
 #endif // USE_DSHOT
     } else {
@@ -529,6 +546,8 @@ void disarm(flightLogDisarmReason_e reason)
     if (crashFlipModeActive) {
         crashFlipModeActive = false;
     }
+    crashflipExitThrottleWait = false;
+    crashflipDirectionPending = false;
 
         // always set motor direction to normal on disarming
 #ifdef USE_DSHOT
@@ -1406,6 +1425,16 @@ FAST_CODE void taskMainPidLoop(timeUs_t currentTimeUs)
 bool isCrashFlipModeActive(void)
 {
     return crashFlipModeActive;
+}
+
+bool isCrashFlipExitThrottleWait(void)
+{
+    return crashflipExitThrottleWait;
+}
+
+bool isCrashFlipDirectionPending(void)
+{
+    return crashflipDirectionPending;
 }
 
 timeUs_t getLastDisarmTimeUs(void)
